@@ -337,6 +337,7 @@ int main(int argc, char **argv)
 	char* addr = "127.0.0.1";
 	int port = 1234;
 	uint32_t frequency = 100000000,samp_rate = 0;
+	uint8_t clock_status = 0xFF;
 	struct sockaddr_in local, remote;
 	int gain = 0;
 	struct llist *curelem,*prev;
@@ -489,6 +490,20 @@ int main(int argc, char **argv)
                 airspy_exit();
                 return -1;
         }
+
+    r = airspy_si5351c_read(dev, 0x00, &clock_status);
+    if( r != AIRSPY_SUCCESS ) {
+        fprintf(stderr,"airspy_si5351c_read() failed: %s (%d)\n", airspy_error_name(r), r);
+        airspy_close(dev);
+        airspy_exit();
+        return -1;
+    } else {
+        if((clock_status & 0x10) == 0x10) {
+            if(verbose) printf("Frequency reference: Internal TCXO\n");
+        } else {
+            if(verbose) printf("Frequency reference: External Clock\n");
+        }
+    }
 
 	sigact.sa_handler = sighandler;
 	sigemptyset(&sigact.sa_mask);
