@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -82,6 +83,7 @@ void usage(void)
 {
 	printf("airspy_tcp, a rtl-tcp compatible, I/Q server for airspy SDR\n\n"
 		"Usage:\t[-a listen address]\n"
+		"\t[-d device serial]\n"
 		"\t[-p listen port (default: 1234)]\n"
 		"\t[-f frequency to tune to [Hz]]\n"
 		"\t[-g gain (default: 0 for auto)]\n"
@@ -325,6 +327,8 @@ static void *command_worker(void *arg)
 int main(int argc, char **argv)
 {
 	int r, opt;
+	bool device_serial_specified = false;
+	uint64_t device_serial;
 	char* addr = "127.0.0.1";
 	int port = 1234;
 	uint32_t frequency = 100000000,samp_rate = 0;
@@ -341,8 +345,12 @@ int main(int argc, char **argv)
 	dongle_info_t dongle_info;
 	struct sigaction sigact, sigign;
 
-	while ((opt = getopt(argc, argv, "a:p:f:g:s:b:n:d:P:TD:v")) != -1) {
+	while ((opt = getopt(argc, argv, "d:a:p:f:g:s:b:n:d:P:TD:v")) != -1) {
 		switch (opt) {
+		case 'd':
+			device_serial_specified = true;
+			device_serial = (uint64_t)strtol(optarg, NULL, 16);
+			break;
 		case 'f':
 			frequency = (uint32_t)atoi(optarg);
 			break;
@@ -385,7 +393,14 @@ int main(int argc, char **argv)
 	if (argc < optind)
 		usage();
 
+    if(device_serial_specified)
+    {
+        r = airspy_open_sn(&dev, device_serial);
+    }
+    else
+    {
         r = airspy_open(&dev);
+    }
         if( r != AIRSPY_SUCCESS ) {
                 fprintf(stderr,"airspy_open() failed: %s (%d)\n", airspy_error_name(r), r);
                 airspy_exit();
