@@ -98,6 +98,7 @@ void usage(void)
 
 static void sighandler(int signum)
 {
+	(void)signum;
 	do_exit = 1;
 	pthread_cond_signal(&cond);
 }
@@ -165,6 +166,7 @@ static int rx_callback(airspy_transfer_t* transfer)
 
 static void *tcp_worker(void *arg)
 {
+	(void)arg;
 	struct llist *curelem;
 	int bytesleft,bytessent, index;
 
@@ -222,7 +224,8 @@ static int set_agc(uint8_t value)
 
 static int set_samplerate(uint32_t fs)
 {
-	int r,i;
+	uint32_t i;
+	int r;
 
         for(i=0;i<fscount;i++)
       		if(supported_samplerates[i]==fs) break;
@@ -245,6 +248,7 @@ static int set_freq(uint32_t f)
 
 static void *command_worker(void *arg)
 {
+	(void)arg;
 	int left, received = 0;
 	fd_set readfds;
 	struct command cmd={0, 0};
@@ -280,6 +284,7 @@ static void *command_worker(void *arg)
 			break;
 		case 0x03:
 			if(verbose) printf("set gain mode %d : not implemented \n", ntohl(cmd.param));
+			break;
 		case 0x04:
 			if(verbose) printf("set gain : %d\n", ntohl(cmd.param));
 			airspy_set_linearity_gain(dev,(ntohl(cmd.param)+250)/37);
