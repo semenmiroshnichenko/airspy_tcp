@@ -67,6 +67,7 @@ typedef struct { /* structure size must be multiple of 2 bytes */
 static struct airspy_device* dev = NULL;
 static uint32_t fscount,*supported_samplerates;
 static int verbose=0;
+static int lock=0;
 static int ppm_error=0;
 static int dshift=1;
 
@@ -92,6 +93,7 @@ void usage(void)
 		"\t[-T enable bias-T ]\n"
 		"\t[-P ppm_error (default: 0) ]\n"
 		"\t[-D g digital shift (default : 1) ]\n"
+		"\t[-L Lock settings ]\n"
 		"\t[-v Verbose ]\n");
 	exit(1);
 }
@@ -273,6 +275,14 @@ static void *command_worker(void *arg)
 				pthread_exit(NULL);
 			}
 		}
+
+		if(lock)
+		{
+			cmd.cmd = 0xff;
+			printf("Control failed - settings locked!\n");
+			continue;
+		}
+
 		switch(cmd.cmd) {
 		case 0x01:
 			if(verbose) printf("set freq %d\n", ntohl(cmd.param));
@@ -351,7 +361,7 @@ int main(int argc, char **argv)
 	dongle_info_t dongle_info;
 	struct sigaction sigact, sigign;
 
-	while ((opt = getopt(argc, argv, "d:a:p:f:g:s:b:n:d:P:TD:v")) != -1) {
+	while ((opt = getopt(argc, argv, "d:a:p:f:g:s:b:n:d:P:TD:Lv")) != -1) {
 		switch (opt) {
 		case 'd':
 			device_serial_specified = true;
@@ -384,6 +394,9 @@ int main(int argc, char **argv)
                 case 'D':
                         dshift = atoi(optarg);
                         break;
+        case 'L':
+			lock = 1;
+			break;
 		case 'v':
 			verbose = 1;
 			break;
@@ -503,6 +516,11 @@ int main(int argc, char **argv)
         } else {
             if(verbose) printf("Frequency reference: External Clock\n");
         }
+    }
+
+    if(lock)
+    {
+    	if(verbose) printf("Settings locked.\n");
     }
 
 	sigact.sa_handler = sighandler;
