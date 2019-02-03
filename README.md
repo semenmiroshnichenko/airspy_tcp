@@ -1,6 +1,10 @@
 # airspy_tcp
 ## a rtl-tcp compatible, IQ server for airspy SDR
 
+### Dependencies
+
+airspy_host, libsamplerate0-dev
+
 airspy_tcp is a direct port of [rtl_tcp](https://github.com/osmocom/rtl-sdr) for the [airspy](https://airspy.com/).
 
 As the rtl_tcp protocol is only 8 bits IQ, man will loose the major advantage of an airspy : its 12bits DAC, but :

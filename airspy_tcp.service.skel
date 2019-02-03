@@ -1,0 +1,14 @@
+[Unit]
+Description=AirSpy TCP Server
+After=syslog.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/stdbuf -oL -eL {{directory}}/airspy_tcp -v -D 0x644064DC2354AACD -S 2500000 -s 250000 -f 956000000
+WorkingDirectory={{directory}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -35,8 +35,17 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <float.h>
 
 #include <libairspy/airspy.h>
+#include <samplerate.h>
+
+// SRC_SINC_BEST_QUALITY 97dB 97%
+// SRC_SINC_MEDIUM_QUALITY 97dB 90%
+// SRC_SINC_FASTEST 97dB 80%
+// SRC_LINEAR
+#define DEFAULT_CONVERTER	SRC_SINC_MEDIUM_QUALITY
+SRC_STATE *src_state_ptr;
 
 #define SOCKADDR struct sockaddr
 #define SOCKET int
@@ -52,8 +61,11 @@ static pthread_mutex_t exit_cond_lock;
 static pthread_mutex_t ll_mutex;
 static pthread_cond_t cond;
 
+static uint32_t rf_samplerate;
+static uint32_t output_samplerate;
+
 struct llist {
-	char *data;
+	uint8_t *data;
 	size_t len;
 	struct llist *next;
 };
@@ -88,7 +100,8 @@ void usage(void)
 		"\t[-p listen port (default: 1234)]\n"
 		"\t[-f frequency to tune to [Hz]]\n"
 		"\t[-g gain (default: 0 for auto)]\n"
-		"\t[-s samplerate in Hz ]\n"
+		"\t[-s output samplerate in Hz ]\n"
+		"\t[-S hardware samplerate in Hz ]\n"
 		"\t[-n max number of linked list buffer to keep ]\n"
 		"\t[-T enable bias-T ]\n"
 		"\t[-P ppm_error (default: 0) ]\n"
@@ -107,62 +120,105 @@ static void sighandler(int signum)
 
 static int rx_callback(airspy_transfer_t* transfer)
 {
-	short *buf;
-	int len;
 
-	len=2*transfer->sample_count;
-	buf=(short *)transfer->samples;
+	float *airspy_buffer;
+	float *resampled_buffer;
 
-	if(!do_exit) {
-		int i;
-		char *data;
-		struct llist *rpt;
-
-		rpt = (struct llist*)malloc(sizeof(struct llist));
-		rpt->data = malloc(len);
-		rpt->len = len;
-		rpt->next = NULL;
-
-		data=rpt->data;
-		for(i=0;i<len;i++,buf++,data++) {
-			short v=*buf<<dshift;
-			short o;
-
-			 /* stupid added offset, because osmosdr client code */
-			 /* try to compensate rtl dongle offset */
-			 o=(v-154)>>8;
-
-			/* round to 8bits half up to even */
-			if(v&0x80) {
-			 if(v&0x7f) {o++;} else { if(v&0x100) o++;}
-			}
-
-			*data=(unsigned char)((o&0xff)+128);
-		}
-
-		pthread_mutex_lock(&ll_mutex);
-
-		  if (ls_buffer == NULL) {
-			ls_buffer = le_buffer = rpt;
-		  } else {
-			le_buffer->next=rpt;
-			le_buffer=rpt;
-		  }
-		  global_numq++;
-
-		if(global_numq>llbuf_num) {
-			struct llist *curelem;
-			curelem=ls_buffer;
-			ls_buffer=ls_buffer->next;
-			if(ls_buffer==NULL) le_buffer=NULL;
-			global_numq--;
-			free(curelem->data);
-			free(curelem);
-		}
-
-		pthread_cond_signal(&cond);
-		pthread_mutex_unlock(&ll_mutex);
+	if(do_exit)
+	{
+		return 0;
 	}
+
+	/** Resample floats at <hw sample rate> to <output sample rate> **/
+	airspy_buffer = (float *)transfer->samples;
+
+	resampled_buffer = (float *)malloc(2 * transfer->sample_count * sizeof(float));
+
+	SRC_DATA src_data;
+	src_data.data_in = airspy_buffer;
+	src_data.input_frames = transfer->sample_count;
+
+	src_data.data_out = resampled_buffer;
+	src_data.output_frames = transfer->sample_count;
+
+	src_data.src_ratio = (double)output_samplerate/(double)rf_samplerate;
+	src_data.end_of_input = 0;
+
+	if(src_process(src_state_ptr, &src_data) == 0)
+	{
+		printf("Processed OK, %d samples in, %ld used, %ld samples out.\n"
+			, transfer->sample_count
+			, src_data.input_frames_used
+			, src_data.output_frames_gen
+		);
+	}
+	else
+	{
+		printf("Processing error\n");
+	}
+
+	/** Convert float32 -> uint8 **/
+
+	/* Allocate new linked-list element, with appropriate data size */
+	struct llist *rpt;
+	rpt = (struct llist*)malloc(sizeof(struct llist));
+	rpt->data = malloc(2 * src_data.output_frames_gen * sizeof(uint8_t));
+	rpt->len = 2 * src_data.output_frames_gen;
+	rpt->next = NULL;
+
+	for(int i=0; i<2*src_data.output_frames_gen; i++)
+	{
+		//short v = *buf<<dshift;
+		//short o;
+
+		 /* stupid added offset, because osmosdr client code */
+		 /* try to compensate rtl dongle offset */
+		 //o=(v-154)>>8;
+
+		/* round to 8bits half up to even */
+		//if(v&0x80) {
+		// if(v&0x7f) {o++;} else { if(v&0x100) o++;}
+		//}
+
+		//*data=(unsigned char)((o&0xff)+128);
+
+		rpt->data[i] = (uint8_t)((resampled_buffer[i]*(1<<11)*128) + 128);
+		//printf("%d,", rpt->data[i]);
+	}
+
+	free(resampled_buffer);
+
+	/* Move data onto linked-list buffer for TCP output */
+	pthread_mutex_lock(&ll_mutex);
+
+	/* Copy pointer onto buffer */
+	if (ls_buffer == NULL)
+	{
+		ls_buffer = le_buffer = rpt;
+	}
+	else
+	{
+		le_buffer->next=rpt;
+		le_buffer=rpt;
+	}
+	global_numq++;
+
+	/* Trim list */
+	if(global_numq > llbuf_num)
+	{
+		struct llist *curelem;
+		curelem=ls_buffer;
+		ls_buffer=ls_buffer->next;
+		if(ls_buffer==NULL)
+			le_buffer=NULL;
+		global_numq--;
+		free(curelem->data);
+		free(curelem);
+	}
+
+	pthread_cond_signal(&cond);
+	pthread_mutex_unlock(&ll_mutex);
+
 	return 0;
 }
 
@@ -170,34 +226,42 @@ static void *tcp_worker(void *arg)
 {
 	(void)arg;
 	struct llist *curelem;
-	int bytesleft,bytessent, index;
+	int bytessent, index;
 
-	while(1) {
+	while(1)
+	{
 
 		pthread_mutex_lock(&ll_mutex);
+
 		while(ls_buffer==NULL && do_exit==0)
 			pthread_cond_wait(&cond, &ll_mutex);
 
-		if(do_exit) {
+		if(do_exit)
+		{
 			pthread_mutex_unlock(&ll_mutex);
 			pthread_exit(0);
 		}
 
+		/* Capture pointer to top (oldest) element */
 		curelem = ls_buffer;
-		ls_buffer=ls_buffer->next;
+		/* Move next element up to the top (can be NULL) */
+		ls_buffer = ls_buffer->next;
+		/* Decrement list counter */
 		global_numq--;
+
 		pthread_mutex_unlock(&ll_mutex);
 
-		bytesleft = curelem->len;
 		index = 0;
-		while(bytesleft > 0) {
-			bytessent = send(s,  &curelem->data[index], bytesleft, 0);
-			bytesleft -= bytessent;
+		while(curelem->len > 0)
+		{
+			bytessent = send(s,  &curelem->data[index], curelem->len, 0);
+			curelem->len -= bytessent;
 			index += bytessent;
-			if(bytessent == SOCKET_ERROR || do_exit) {
-					printf("worker socket bye\n");
-					sighandler(0);
-					pthread_exit(NULL);
+			if(bytessent == SOCKET_ERROR || do_exit)
+			{
+				printf("worker socket bye\n");
+				sighandler(0);
+				pthread_exit(NULL);
 			}
 		}
 		free(curelem->data);
@@ -223,21 +287,27 @@ static int set_agc(uint8_t value)
         return r;
 }
 
-
-static int set_samplerate(uint32_t fs)
+static int set_hw_samplerate(uint32_t fs)
 {
 	uint32_t i;
 	int r;
 
-        for(i=0;i<fscount;i++)
-      		if(supported_samplerates[i]==fs) break;
-	if(i>=fscount) {
-		printf("sample rate %d not supported\n",fs);
-		return AIRSPY_ERROR_INVALID_PARAM;
-	}
+    for(i=0;i<fscount;i++)
+    {
+      	if(supported_samplerates[i]==fs)
+      	{
+      		break;
+      	}
+    }
 
-       	r=airspy_set_samplerate(dev, i);
-	return r;
+    if(i < fscount)
+    {
+    	r=airspy_set_samplerate(dev, i);
+		return r;
+    }
+
+	printf("hw sample rate %d not supported\n",fs);
+	return AIRSPY_ERROR_INVALID_PARAM;
 }
 
 static int set_freq(uint32_t f)
@@ -286,11 +356,11 @@ static void *command_worker(void *arg)
 		switch(cmd.cmd) {
 		case 0x01:
 			if(verbose) printf("set freq %d\n", ntohl(cmd.param));
-			set_freq(ntohl(cmd.param));
+			//set_freq(ntohl(cmd.param));
 			break;
 		case 0x02:
 			if(verbose) printf("set sample rate : %d\n", ntohl(cmd.param));
-			set_samplerate(ntohl(cmd.param));
+			//set_samplerate(ntohl(cmd.param));
 			break;
 		case 0x03:
 			if(verbose) printf("set gain mode %d : not implemented \n", ntohl(cmd.param));
@@ -346,7 +416,7 @@ int main(int argc, char **argv)
 	uint64_t device_serial;
 	char* addr = "127.0.0.1";
 	int port = 1234;
-	uint32_t frequency = 100000000,samp_rate = 0;
+	uint32_t frequency = 100000000,samp_rate = 0, hw_samp_rate = 0;
 	uint8_t clock_status = 0xFF;
 	struct sockaddr_in local, remote;
 	int gain = 0;
@@ -361,7 +431,7 @@ int main(int argc, char **argv)
 	dongle_info_t dongle_info;
 	struct sigaction sigact, sigign;
 
-	while ((opt = getopt(argc, argv, "d:a:p:f:g:s:b:n:d:P:TD:Lv")) != -1) {
+	while ((opt = getopt(argc, argv, "d:a:p:f:g:s:S:b:n:d:P:TD:Lv")) != -1) {
 		switch (opt) {
 		case 'd':
 			device_serial_specified = true;
@@ -375,6 +445,9 @@ int main(int argc, char **argv)
 			break;
 		case 's':
 			samp_rate = (uint32_t)atoi(optarg);
+			break;
+		case 'S':
+			hw_samp_rate = (uint32_t)atoi(optarg);
 			break;
 		case 'a':
 			addr = optarg;
@@ -426,7 +499,7 @@ int main(int argc, char **argv)
                 return -1;
         }
 
-        r = airspy_set_sample_type(dev, AIRSPY_SAMPLE_INT16_IQ);
+        r = airspy_set_sample_type(dev, AIRSPY_SAMPLE_FLOAT32_IQ);
         if( r != AIRSPY_SUCCESS ) {
                 fprintf(stderr,"airspy_set_sample_type() failed: %s (%d)\n", airspy_error_name(r), r);
                 airspy_close(dev);
@@ -452,14 +525,15 @@ int main(int argc, char **argv)
                 return -1;
 	}
 
-	if(samp_rate) {
-        	r = set_samplerate(samp_rate);
+	if(hw_samp_rate) {
+        	r = set_hw_samplerate(hw_samp_rate);
         	if( r != AIRSPY_SUCCESS ) {
                 	fprintf(stderr,"set_samplerate() failed: %s (%d)\n", airspy_error_name(r), r);
                 	airspy_close(dev);
                 	airspy_exit();
                 	return -1;
         	}
+        	rf_samplerate = hw_samp_rate;
 	} else {
        		r=airspy_set_samplerate(dev, fscount-1);
         	if( r != AIRSPY_SUCCESS ) {
@@ -469,6 +543,8 @@ int main(int argc, char **argv)
                 	return -1;
         	}
 	}
+
+	output_samplerate = samp_rate;
 
 	/* Set the frequency */
         r = set_freq(frequency);
@@ -537,6 +613,16 @@ int main(int argc, char **argv)
 	pthread_mutex_init(&exit_cond_lock, NULL);
 	pthread_cond_init(&cond, NULL);
 	pthread_cond_init(&exit_cond, NULL);
+
+	int src_error;
+	src_state_ptr = src_new(DEFAULT_CONVERTER, 2, &src_error);
+	if(src_state_ptr == NULL)
+	{
+		fprintf(stderr,"error setting up samplerate converter: (%d)\n", src_error);
+        airspy_close(dev);
+        airspy_exit();
+        return -1;
+	}
 
 	memset(&local,0,sizeof(local));
 	local.sin_family = AF_INET;
@@ -637,6 +723,7 @@ out:
 	airspy_exit();
 	close(listensocket);
 	close(s);
+	src_delete(src_state_ptr);
 	printf("bye!\n");
 	return r >= 0 ? r : -r;
 }
