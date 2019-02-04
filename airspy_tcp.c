@@ -38,8 +38,16 @@
 #include <float.h>
 
 #include <libairspy/airspy.h>
+#include <samplerate.h>
 
-#define AIRSPY_SAMPLE_TYPE AIRSPY_SAMPLE_INT16_IQ // AIRSPY_SAMPLE_FLOAT32_IQ
+// SRC_SINC_BEST_QUALITY 97dB 97%
+// SRC_SINC_MEDIUM_QUALITY 97dB 90%
+// SRC_SINC_FASTEST 97dB 80%
+// SRC_LINEAR
+#define DEFAULT_CONVERTER SRC_SINC_FASTEST
+SRC_STATE *src_state_ptr;
+
+#define AIRSPY_SAMPLE_TYPE AIRSPY_SAMPLE_FLOAT32_IQ // AIRSPY_SAMPLE_INT16_IQ
 
 #define SOCKADDR struct sockaddr
 #define SOCKET int
@@ -73,6 +81,8 @@ static int verbose=0;
 static int lock=0;
 static int ppm_error=0;
 static int dshift=1;
+static int output_sample_rate = 0;
+static int rf_sample_rate = 0;
 
 static int enable_biastee = 0;
 static int global_numq = 0;
@@ -111,11 +121,12 @@ static void sighandler(int signum)
 
 static int rx_callback(airspy_transfer_t* transfer)
 {
-
-  uint16_t *airspy_buffer;
+  int r;
+  float *airspy_buffer;
+  float *resampled_buffer;
   struct llist *rpt;
   uint32_t i;
-  //int16_t v;
+  int16_t v;
   int16_t o;
 
   if(do_exit)
@@ -123,7 +134,36 @@ static int rx_callback(airspy_transfer_t* transfer)
     return 0;
   }
 
-  airspy_buffer = (uint16_t *)transfer->samples;
+  airspy_buffer = (float *)transfer->samples;
+
+  resampled_buffer = (float *)malloc(2 * transfer->sample_count * sizeof(float));
+
+  SRC_DATA src_data;
+  src_data.data_in = airspy_buffer;
+  src_data.input_frames = (transfer->sample_count);
+
+  src_data.data_out = resampled_buffer;
+  src_data.output_frames = (transfer->sample_count);
+
+  src_data.src_ratio = (double)output_sample_rate/(double)rf_sample_rate;
+  src_data.end_of_input = 0;
+
+  r = src_process(src_state_ptr, &src_data);
+  if(r == 0)
+  {
+    //printf("Processed OK, %d samples in, %ld used, %ld samples out.\n"
+    //  , transfer->sample_count
+    //  , src_data.input_frames_used
+    //  , src_data.output_frames_gen
+    //);
+  }
+  else
+  {
+    printf("Processing error: %s\n", src_strerror(r));
+    printf(" - using src ratio: %.03f\n", src_data.src_ratio);
+    free(resampled_buffer);
+    return 0;
+  }
 
   /* Allocate new linked-list element, with appropriate data size */
   rpt = (struct llist*)malloc(sizeof(struct llist));
@@ -133,22 +173,22 @@ static int rx_callback(airspy_transfer_t* transfer)
 
   for(i = 0; i < rpt->len; i++)
   {
-    o = ((airspy_buffer[i] >> dshift) - 154) >> 8;
+    v = (((int16_t)(resampled_buffer[i]*INT16_MAX) >> dshift));
+    /* stupid added offset (-154), because osmosdr client code */
+    /* try to compensate rtl dongle offset */
 
-     /* stupid added offset, because osmosdr client code */
-     /* try to compensate rtl dongle offset */
-    // o=(v-154)>>8;
-  
     /* round to 8bits half up to even */
-    //if(v&0x80) {
-    // if(v&0x7f) {o++;} else { if(v&0x100) o++;}
-    //}
-
-    //*data=(unsigned char)((o&0xff)+128);
+    o = v >> 8;
+    if(v&0x80)
+    {
+     if(v&0x7f) {o++;} else { if(v&0x100) o++;}
+    }
 
     rpt->data[i] = (uint8_t)((o&0xff) + 128);
     //printf("%d,", rpt->data[i]);
   }
+
+  free(resampled_buffer);
 
   /* Move data onto linked-list buffer for TCP output */
   pthread_mutex_lock(&ll_mutex);
@@ -378,7 +418,7 @@ int main(int argc, char **argv)
   uint64_t device_serial;
   char* addr = "127.0.0.1";
   int port = 1234;
-  uint32_t frequency = 100000000,hw_samp_rate = 0;
+  uint32_t frequency = 100000000;
   uint8_t clock_status = 0xFF;
   struct sockaddr_in local, remote;
   int gain = 0;
@@ -393,7 +433,7 @@ int main(int argc, char **argv)
   dongle_info_t dongle_info;
   struct sigaction sigact, sigign;
 
-  while ((opt = getopt(argc, argv, "d:a:p:f:g:S:b:n:d:P:TD:Lv")) != -1) {
+  while ((opt = getopt(argc, argv, "d:a:p:f:g:s:S:b:n:d:P:TD:Lv")) != -1) {
     switch (opt) {
     case 'd':
       device_serial_specified = true;
@@ -405,8 +445,11 @@ int main(int argc, char **argv)
     case 'g':
       gain = (int)(atof(optarg) * 10); /* tenths of a dB */
       break;
+    case 's':
+      output_sample_rate = (uint32_t)atoi(optarg);
+      break;
     case 'S':
-      hw_samp_rate = (uint32_t)atoi(optarg);
+      rf_sample_rate = (uint32_t)atoi(optarg);
       break;
     case 'a':
       addr = optarg;
@@ -486,15 +529,15 @@ int main(int argc, char **argv)
     return -1;
   }
 
-  if(hw_samp_rate) {
-    r = set_hw_samplerate(hw_samp_rate);
+  if(rf_sample_rate) {
+    r = set_hw_samplerate(rf_sample_rate);
     if( r != AIRSPY_SUCCESS ) {
       fprintf(stderr,"set_samplerate() failed: %s (%d)\n", airspy_error_name(r), r);
       airspy_close(dev);
       airspy_exit();
       return -1;
     }
-    if(verbose) printf("Hardware samplerate set to: %.06f MS/s\n", hw_samp_rate/1000000.0);
+    if(verbose) printf("Hardware samplerate set to: %.06f MS/s\n", rf_sample_rate/1000000.0);
   } else {
     r=airspy_set_samplerate(dev, fscount-1);
     if( r != AIRSPY_SUCCESS ) {
@@ -565,6 +608,21 @@ int main(int argc, char **argv)
       if(verbose) printf("Frequency reference: External Clock\n");
     }
   }
+
+  if(output_sample_rate == 0)
+  {
+    output_sample_rate = rf_sample_rate;
+  }
+  int src_error;
+  src_state_ptr = src_new(DEFAULT_CONVERTER, 2, &src_error);
+  if(src_state_ptr == NULL)
+  {
+    fprintf(stderr,"error setting up samplerate converter: (%d)\n", src_error);
+    airspy_close(dev);
+    airspy_exit();
+    return -1;
+  }
+  if(verbose) printf("Output samplerate set to: %.06f MS/s\n", output_sample_rate / (1000.0 * 1000.0));
 
   if(lock)
   {
@@ -685,6 +743,7 @@ out:
   airspy_exit();
   close(listensocket);
   close(s);
+  src_delete(src_state_ptr);
   printf("bye!\n");
   return r >= 0 ? r : -r;
 }
