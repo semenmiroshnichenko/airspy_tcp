@@ -5,7 +5,7 @@ After=syslog.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/stdbuf -oL -eL {{directory}}/airspy_tcp -v -d 0x644064DC2354AACD -S 2500000 -f 956000000 -L
+ExecStart=/usr/bin/stdbuf -oL -eL {{directory}}/airspy_tcp -v -d 0x644064DC236992CD -S 2500000 -s 2048000 -f 956005000 -D 3 -L
 WorkingDirectory={{directory}}
 Restart=always
 RestartSec=5
