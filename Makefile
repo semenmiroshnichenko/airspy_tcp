@@ -25,7 +25,7 @@ SRC = $(SRCDIR)/airspy_tcp.c
 
 LIBSDIR = 
 
-LIBS = -lm -pthread `pkg-config --libs libairspy` -lusb-1.0
+LIBS = -lm -pthread `pkg-config --libs libairspy` -lusb-1.0 -lsamplerate
 
 CFLAGS += `pkg-config --cflags libairspy`
 
