@@ -75,7 +75,7 @@ typedef struct { /* structure size must be multiple of 2 bytes */
   uint32_t tuner_gain_count;
 } dongle_info_t;
 
-static struct airspy_device* dev = NULL;
+static struct airspyhf_device* dev = NULL;
 static uint32_t fscount,*supported_samplerates;
 static int verbose=0;
 static int lock=0;
@@ -119,7 +119,7 @@ static void sighandler(int signum)
   pthread_cond_signal(&cond);
 }
 
-static int rx_callback(airspy_transfer_t* transfer)
+static int rx_callback(airspyhf_transfer_t* transfer)
 {
   int r;
   float *airspy_buffer;
@@ -281,11 +281,11 @@ static int set_agc(uint8_t value)
 {
   int r;
 
-  r=airspy_set_lna_agc(dev, value);
-        if( r != AIRSPY_SUCCESS ) return r;
+  r=airspyhf_set_hf_agc(dev, value);
+        if( r != AIRSPYHF_SUCCESS ) return r;
 
 
-  r=airspy_set_mixer_agc(dev, value);
+  //r=airspy_set_mixer_agc(dev, value);
         return r;
 }
 
@@ -304,18 +304,18 @@ static int set_hw_samplerate(uint32_t fs)
 
   if(i < fscount)
   {
-    r=airspy_set_samplerate(dev, i);
+    r=airspyhf_set_samplerate(dev, i);
     return r;
   }
 
   printf("hw sample rate %d not supported\n",fs);
-  return AIRSPY_ERROR_INVALID_PARAM;
+  return AIRSPYHF_ERROR;
 }
 
 static int set_freq(uint32_t f)
 {
   int r;
-  r=airspy_set_freq(dev, (uint32_t)((float)f*(1.0+(float)ppm_error/1e6)));
+  r=airspyhf_set_freq(dev, (uint32_t)((float)f*(1.0+(float)ppm_error/1e6)));
   return r;
 }
 
@@ -368,8 +368,8 @@ static void *command_worker(void *arg)
         if(verbose) printf("set gain mode %d : not implemented \n", ntohl(cmd.param));
         break;
       case 0x04:
-        if(verbose) printf("set gain : %d\n", ntohl(cmd.param));
-        airspy_set_linearity_gain(dev,(ntohl(cmd.param)+250)/37);
+        if(verbose) printf("set gain (not implemented!!) : %d\n", ntohl(cmd.param));
+        //airspy_set_linearity_gain(dev,(ntohl(cmd.param)+250)/37);
         break;
       case 0x05:
         if(verbose) printf("set freq correction %d\n",ntohl(cmd.param));
@@ -397,12 +397,12 @@ static void *command_worker(void *arg)
         if(verbose) printf("set tuner xtal %d : not implemented\n",ntohl(cmd.param));
         break;
       case 0x0d:
-        if(verbose) printf("set tuner gain by index %d \n", ntohl(cmd.param));
-        airspy_set_linearity_gain(dev,ntohl(cmd.param));
+        if(verbose) printf("set tuner gain by index %d (not supported) \n", ntohl(cmd.param));
+        //airspy_set_linearity_gain(dev,ntohl(cmd.param));
         break;
       case 0x0e:
-        if(verbose) printf("set bias tee %d\n", ntohl(cmd.param));
-        airspy_set_rf_bias(dev, (int)ntohl(cmd.param));
+        if(verbose) printf("set bias tee (not implemented) %d\n", ntohl(cmd.param));
+        //airspy_set_rf_bias(dev, (int)ntohl(cmd.param));
         break;
       default:
         break;
@@ -419,7 +419,7 @@ int main(int argc, char **argv)
   char* addr = "127.0.0.1";
   int port = 1234;
   uint32_t frequency = 100000000;
-  uint8_t clock_status = 0xFF;
+  //uint8_t clock_status = 0xFF;
   struct sockaddr_in local, remote;
   int gain = 0;
   struct llist *curelem,*prev;
@@ -489,100 +489,103 @@ int main(int argc, char **argv)
 
   if(device_serial_specified)
   {
-    r = airspy_open_sn(&dev, device_serial);
+    r = airspyhf_open_sn(&dev, device_serial);
     if(verbose) printf("Opening device: 0x%016lx\n", device_serial);
   }
   else
   {
-    r = airspy_open(&dev);
+    r = airspyhf_open(&dev);
   }
 
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_open() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_exit();
+  if( r != AIRSPYHF_SUCCESS ) {
+    fprintf(stderr,"airspy_open() failed: (%d)\n", r);
+    ////airspy_exit();
     return -1;
   }
 
-  r = airspy_set_sample_type(dev, AIRSPY_SAMPLE_TYPE);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_set_sample_type() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
-    return -1;
-  }
+  //r = airspy_set_sample_type(dev, AIRSPY_SAMPLE_TYPE);
+  //if( r != AIRSPYHF_SUCCESS ) {
+  //  fprintf(stderr,"airspy_set_sample_type() failed: (%d)\n", r);
+  //  airspyhf_close(dev);
+  //  //airspy_exit();
+  //  return -1;
+  //}
 
-  airspy_set_packing(dev, 1);
+  //airspy_set_packing(dev, 1);
 
-  r=airspy_get_samplerates(dev, &fscount, 0);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_get_sample_rate() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
+  r=airspyhf_get_samplerates(dev, &fscount, 0);
+  if( r != AIRSPYHF_SUCCESS ) {
+    fprintf(stderr,"airspy_get_sample_rate() failed: (%d)\n", r);
+    airspyhf_close(dev);
+    ////airspy_exit();
     return -1;
   }
   supported_samplerates = (uint32_t *) malloc(fscount * sizeof(uint32_t));
-  r=airspy_get_samplerates(dev, supported_samplerates, fscount);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_get_sample_rate() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
+  r=airspyhf_get_samplerates(dev, supported_samplerates, fscount);
+  if( r != AIRSPYHF_SUCCESS ) {
+    fprintf(stderr,"airspy_get_sample_rate() failed: (%d)\n", r);
+    airspyhf_close(dev);
+    ////airspy_exit();
     return -1;
   }
 
   if(rf_sample_rate) {
-    r = set_hw_samplerate(rf_sample_rate);
-    if( r != AIRSPY_SUCCESS ) {
-      fprintf(stderr,"set_samplerate() failed: %s (%d)\n", airspy_error_name(r), r);
-      airspy_close(dev);
-      airspy_exit();
+    fprintf(stderr,"set_samplerate() rf_sample_rate not supported\n");
+    //r = set_hw_samplerate(rf_sample_rate);
+    //if( r != AIRSPYHF_SUCCESS ) {
+    //  fprintf(stderr,"set_samplerate() failed: (%d)\n", r);
+    //  airspyhf_close(dev);
+    //  //airspy_exit();
+    //  return -1;
+    //}
+    //if(verbose) printf("Hardware samplerate set to: %.06f MS/s\n", rf_sample_rate/1000000.0);
+  } 
+  //else {
+  
+    r=airspyhf_set_samplerate(dev, fscount-1);
+    if( r != AIRSPYHF_SUCCESS ) {
+      fprintf(stderr,"airspy_set_samplerate() failed: (%d)\n", r);
+      airspyhf_close(dev);
+      //airspy_exit();
       return -1;
     }
-    if(verbose) printf("Hardware samplerate set to: %.06f MS/s\n", rf_sample_rate/1000000.0);
-  } else {
-    r=airspy_set_samplerate(dev, fscount-1);
-    if( r != AIRSPY_SUCCESS ) {
-      fprintf(stderr,"airspy_set_samplerate() failed: %s (%d)\n", airspy_error_name(r), r);
-      airspy_close(dev);
-      airspy_exit();
-      return -1;
-    }
-  }
+  //}
 
   /* Set the frequency */
-  r = set_freq(frequency);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_set_freq() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
+  r = airspyhf_set_freq(dev, frequency);
+  if( r != AIRSPYHF_SUCCESS ) {
+    fprintf(stderr,"airspy_set_freq() failed: (%d)\n", r);
+    airspyhf_close(dev);
+    //airspy_exit();
     return -1;
   }
   if(verbose) printf("Frequency Set: %.06f MHz\n", frequency/(1000.0*1000.0));
 
   if (0 == gain) {
     /* Enable automatic gain */
-    r=set_agc(1);
-    if( r != AIRSPY_SUCCESS ) {
-      fprintf(stderr,"airspy_set agc failed: %s (%d)\n", airspy_error_name(r), r);
+    r=airspyhf_set_hf_agc(dev, 1);
+    if( r != AIRSPYHF_SUCCESS ) {
+      fprintf(stderr,"airspy_set agc failed: (%d)\n", r);
     }
     if(verbose) printf("Tuner gain set to auto.\n");
   } else {
-    r = airspy_set_linearity_gain(dev,(gain+250)/37);
-    if( r != AIRSPY_SUCCESS ) {
-      fprintf(stderr,"set gains failed: %s (%d)\n", airspy_error_name(r), r);
-      airspy_close(dev);
-      airspy_exit();
+    r = airspyhf_set_hf_agc(dev,(gain+250)/37);
+    if( r != AIRSPYHF_SUCCESS ) {
+      fprintf(stderr,"set gains failed: (%d)\n", r);
+      airspyhf_close(dev);
+      //airspy_exit();
       return -1;
     }
     if(verbose) printf("Tuner gain set to %f dB.\n", gain/10.0);
   }
 
-  r = airspy_set_rf_bias(dev, enable_biastee);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_set_rf_bias() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
-    return -1;
-  }
+  //r = airspy_set_rf_bias(dev, enable_biastee);
+  //if( r != AIRSPYHF_SUCCESS ) {
+  //  fprintf(stderr,"airspy_set_rf_bias() failed: (%d)\n", r);
+  //  airspyhf_close(dev);
+  //  //airspy_exit();
+  //  return -1;
+  //}
   if(verbose)
   {
     if(enable_biastee == 1)
@@ -595,19 +598,19 @@ int main(int argc, char **argv)
     }
   }
 
-  r = airspy_si5351c_read(dev, 0x00, &clock_status);
-  if( r != AIRSPY_SUCCESS ) {
-    fprintf(stderr,"airspy_si5351c_read() failed: %s (%d)\n", airspy_error_name(r), r);
-    airspy_close(dev);
-    airspy_exit();
-    return -1;
-  } else {
-    if((clock_status & 0x10) == 0x10) {
-      if(verbose) printf("Frequency reference: Internal TCXO\n");
-    } else {
-      if(verbose) printf("Frequency reference: External Clock\n");
-    }
-  }
+  //r = airspy_si5351c_read(dev, 0x00, &clock_status);
+  //if( r != AIRSPYHF_SUCCESS ) {
+  //  fprintf(stderr,"airspy_si5351c_read() failed: (%d)\n", r);
+  //  airspyhf_close(dev);
+  //  //airspy_exit();
+  //  return -1;
+  //} else {
+  //  if((clock_status & 0x10) == 0x10) {
+  //    if(verbose) printf("Frequency reference: Internal TCXO\n");
+  //  } else {
+  //   if(verbose) printf("Frequency reference: External Clock\n");
+  //  }
+  //}
 
   if(output_sample_rate == 0)
   {
@@ -618,8 +621,8 @@ int main(int argc, char **argv)
   if(src_state_ptr == NULL)
   {
     fprintf(stderr,"error setting up samplerate converter: (%d)\n", src_error);
-    airspy_close(dev);
-    airspy_exit();
+    airspyhf_close(dev);
+    //airspy_exit();
     return -1;
   }
   if(verbose) printf("Output samplerate set to: %.06f MS/s\n", output_sample_rate / (1000.0 * 1000.0));
@@ -706,9 +709,9 @@ int main(int argc, char **argv)
     pthread_attr_destroy(&attr);
 
     fprintf(stderr,"start rx\n");
-    r = airspy_start_rx(dev, rx_callback, NULL);
-    if( r != AIRSPY_SUCCESS ) {
-            fprintf(stderr,"airspy_start_rx() failed: %s (%d)\n", airspy_error_name(r), r);
+    r = airspyhf_start(dev, rx_callback, NULL);
+    if( r != AIRSPYHF_SUCCESS ) {
+            fprintf(stderr,"airspy_start_rx() failed: (%d)\n", r);
       break;
     }
 
@@ -719,11 +722,11 @@ int main(int argc, char **argv)
 
     fprintf(stderr,"stop rx\n");
 
-                r = airspy_stop_rx(dev);
-                if( r != AIRSPY_SUCCESS ) {
-                        fprintf(stderr,"airspy_stop_rx() failed: %s (%d)\n", airspy_error_name(r), r);
+    r = airspyhf_stop(dev);
+    if( r != AIRSPYHF_SUCCESS ) {
+      fprintf(stderr,"airspy_stop_rx() failed: (%d)\n", r);
       break;
-                }
+    }
 
     curelem = ls_buffer;
     while(curelem != 0) {
@@ -739,8 +742,8 @@ int main(int argc, char **argv)
   }
 
 out:
-  airspy_close(dev);
-  airspy_exit();
+  airspyhf_close(dev);
+  //airspy_exit();
   close(listensocket);
   close(s);
   src_delete(src_state_ptr);

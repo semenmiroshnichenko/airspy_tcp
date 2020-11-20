@@ -1,5 +1,5 @@
 # ========================================================================================
-# Makefile for airspy_tcp
+# Makefile for airspyhf_tcp
 # ========================================================================================
 
 # ========================================================================================
@@ -11,23 +11,23 @@ CFLAGS = -Wall -Wextra -Wpedantic -Werror -std=gnu11 -D_GNU_SOURCE
 CFLAGS += -D BUILD_VERSION="\"$(shell git describe --dirty --always)\""	\
 		-D BUILD_DATE="\"$(shell date '+%Y-%m-%d_%H:%M:%S')\""
 
-BIN = airspy_tcp
+BIN = airspyhf_tcp
 
 # ========================================================================================
 # Source files
 
 SRCDIR = ./
 
-SRC = $(SRCDIR)/airspy_tcp.c
+SRC = $(SRCDIR)/airspyhf_tcp.c
 
 # ========================================================================================
 # External Libraries
 
 LIBSDIR = 
 
-LIBS = -lm -pthread `pkg-config --libs libairspy` -lusb-1.0 -lsamplerate
+LIBS = -lm -pthread `pkg-config --libs libairspyhf` -lusb-1.0 -lsamplerate
 
-CFLAGS += `pkg-config --cflags libairspy`
+CFLAGS += `pkg-config --cflags libairspyhf`
 
 # ========================================================================================
 # Makerules
